@@ -1,17 +1,62 @@
 import parser from 'fast-xml-parser';
+import { Subject, BehaviorSubject } from 'rxjs';
+import { debounceTime, map } from 'rxjs/operators';
 
 import Internal from 'internal';
 import Xjs from 'core/xjs';
+
 import isSplitMode from 'helpers/is-split-mode';
+import unescape from 'lodash/unescape';
 
 import { SceneInfo, Placement, SceneId, SceneIndex, Item } from './types';
-import unescape from 'lodash/unescape';
+import { IEmitEvent } from '../event/types';
+
+const EVENTS = {
+  SCENE_ADD: 'OnSceneAdd',
+  SCENE_DELETE: 'OnSceneDelete',
+  SCENE_CHANGE: 'SceneChange',
+  SPLIT_MODE_GET: 'scenedlg:1',
+  SCENE_DELETE_ALL: 'OnSceneDeleteAll',
+};
+
+const USER = 'user';
+const INTERNAL = 'internal';
+const I12 = 'i12';
+
+let getSplitModeActiveScene = false;
+
+const scenesListChange$ = new Subject();
+const scenesList$ = new BehaviorSubject('');
 
 class Scene {
   private internal: Internal;
 
-  constructor({ internal }: Xjs) {
+  constructor({ internal, isRemote }: Xjs) {
     this.internal = internal;
+
+    // for proxy and local only
+    if (!isRemote()) {
+      const getScenesIds = (): Promise<string> =>
+        this.listAll().then((scenesList) =>
+          scenesList.map(({ id }) => id).toString()
+        );
+
+      getScenesIds().then((sceneIdList) => scenesList$.next(sceneIdList));
+
+      scenesListChange$
+        .pipe(
+          debounceTime(100),
+          map((e) => e as IEmitEvent)
+        )
+        .subscribe(async (emitEvent) => {
+          const newIds = await getScenesIds();
+          const oldIds = scenesList$.getValue();
+          if (newIds !== oldIds) {
+            scenesList$.next(newIds);
+            emitEvent(EVENTS.SCENE_CHANGE, await this.listAll());
+          }
+        });
+    }
   }
 
   async getByIndex(index: SceneIndex): Promise<SceneInfo> {
@@ -32,7 +77,7 @@ class Scene {
     const arrayOfScenes = await this.listAll();
 
     return (
-      arrayOfScenes.find(scene => scene.id === id) ||
+      arrayOfScenes.find((scene) => scene.id === id) ||
       Promise.reject(`Scene with id: ${id} not found`)
     );
   }
@@ -127,6 +172,73 @@ class Scene {
       srcid,
       name: unescape(name),
     }));
+  }
+
+  async eventHandler(eventName: string, args: any[], emitEvent: IEmitEvent) {
+    switch (eventName) {
+      case EVENTS.SCENE_ADD:
+        (async () => {
+          const [, stringUrl] = args as string[];
+          const params = new URLSearchParams(stringUrl);
+
+          const scene = params.get('scene');
+
+          if (scene !== I12) {
+            emitEvent(eventName, await this.getByIndex(Number(scene)));
+          }
+
+          if ([USER, INTERNAL].includes(params.get('type'))) {
+            scenesListChange$.next(emitEvent);
+          }
+        })();
+        break;
+      case EVENTS.SCENE_DELETE:
+        (async () => {
+          const [, stringUrl] = args as string[];
+          const params = new URLSearchParams(stringUrl);
+
+          const type = params.get('type');
+
+          const scene = params.get('scene');
+
+          if (scene !== I12) {
+            emitEvent(eventName, await this.getByIndex(Number(scene)));
+          }
+
+          if (type === USER) {
+            scenesListChange$.next(emitEvent);
+          }
+        })();
+        break;
+      case EVENTS.SPLIT_MODE_GET:
+        getSplitModeActiveScene = true;
+        break;
+      case EVENTS.SCENE_CHANGE:
+        const [, sceneIndex] = args as number[];
+
+        if (sceneIndex < 0) {
+          return;
+        }
+
+        const splitMode = await isSplitMode(this.internal);
+
+        if (splitMode) {
+          if (getSplitModeActiveScene) {
+            emitEvent(eventName, await this.getActive());
+          }
+          getSplitModeActiveScene = false;
+          return;
+        }
+
+        emitEvent(eventName, await this.getActive());
+        break;
+      case EVENTS.SCENE_DELETE_ALL:
+        emitEvent(eventName, '');
+
+        scenesListChange$.next(emitEvent);
+      default:
+        return false;
+    }
   }
 }
 

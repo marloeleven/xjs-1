@@ -1,5 +1,9 @@
 import Xjs, { XjsTypes } from 'core/xjs';
 import registerCallback from 'helpers/register-callback';
+import { IInstances, IFunctionVoid } from './types';
+
+import isFunction from 'lodash/isFunction';
+import { values } from 'lodash-es';
 
 const eventCallbacks = {};
 
@@ -14,9 +18,9 @@ function parseSegments(segments: string[]): any {
 }
 
 export default class Events {
-  xjs: Xjs;
+  private xjs: Xjs;
 
-  constructor(xjs: Xjs) {
+  constructor({ xjs, ...instances }) {
     this.xjs = xjs;
 
     registerCallback({
@@ -32,28 +36,41 @@ export default class Events {
       //     });
       //   }
       // },
-      AppOnEvent: (eventName: string, ...args: any) => {
-        // const event = _event.toLowerCase();
-        // SUBSCRIPTIONS_LIST.forEach((subscription) => {
-        //   if (subscription.hasOwnProperty(event)) {
-        //     return subscription[event](args);
-        //   }
-        // });
-        // if (APP_ON_EVENT.SCENE_CHANGE) {
-        //   const sceneInfo = this.scene.getActive();
-        //   this.emitEvent('scene-change', sceneInfo);
-        // }
+      OnEvent: (event: string, sourceId: string, property: string) => {
+        // Triggered only when `ItemSubscribeEvents` method is called
+      },
+      AppOnEvent: async (eventName: string, ...args: any) => {
+        // const data = await Object.values(instances as IInstances).reduce(
+        //   async (val, instance) => {
+        //     if (isFunction(instance)) {
+        //       return await instance.eventHandler(eventName, args);
+        //     }
 
-        if (eventName === 'SceneChange') {
-          console.log('AppOnEvent', eventName, ...args);
-          this.emitEvent(eventName, args);
-        }
+        //     return val;
+        //   },
+        //   Promise.resolve(args)
+        // );
+
+        // this.emitEvent(eventName, data);
+
+        Object.values(instances as IInstances).forEach((instance) => {
+          if (
+            instance.hasOwnProperty('eventHandler') &&
+            isFunction(instance.eventHandler)
+          ) {
+            instance.eventHandler(eventName, args, this.emitEvent);
+          }
+        });
       },
     });
   }
 
+  hasSubscription(eventName: string): Boolean {
+    return eventCallbacks.hasOwnProperty(eventName);
+  }
+
   emitEvent(eventName: string, result: string) {
-    if (eventCallbacks.hasOwnProperty(eventName)) {
+    if (this.hasSubscription(eventName)) {
       eventCallbacks[eventName](result);
     }
 
@@ -62,7 +79,7 @@ export default class Events {
     }
   }
 
-  on(eventName: string, callback: Function) {
+  on(eventName: string, callback: IFunctionVoid) {
     if (this.xjs.isRemote()) {
       this.xjs.remote.remote.registerEvent(eventName, callback);
       return;
@@ -75,6 +92,9 @@ export default class Events {
       this.xjs.remote.remote.unregisterEvent(eventName);
       return;
     }
-    delete eventCallbacks[eventName];
+
+    if (this.hasSubscription(eventName)) {
+      delete eventCallbacks[eventName];
+    }
   }
 }

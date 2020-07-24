@@ -50,6 +50,7 @@
     "@types/lodash-es": "^4.17.3",
     "fast-xml-parser": "^3.12.19",
     "lodash-es": "^4.17.11",
+    "rxjs": "^6.6.0",
     "uuid": "^8.1.0"
   }
 }
